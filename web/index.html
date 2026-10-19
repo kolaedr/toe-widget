@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TOE Light — віджет відключень</title>
+<meta name="description" content="Віджет для iPhone з графіком погодинних відключень Тернопільобленерго. Встановлення за кілька хвилин через Scriptable.">
+<meta name="theme-color" content="#F6F4EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121214" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23FFB340'/%3E%3Cpath d='M36 8 16 36h14l-4 20 22-30H34z' fill='%23121214'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #F6F4EF;
+    --card: #FFFFFF;
+    --ink: #17171A;
+    --muted: #66666E;
+    --line: #E6E2D9;
+    --accent: #FFB340;
+    --accent-ink: #17171A;
+    --on: #30D158;
+    --off: #FF453A;
+    --sw: #FFB340;
+    --widget: #FFFFFF;
+    --shadow: 0 1px 2px rgba(23,23,26,.06), 0 8px 24px rgba(23,23,26,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214;
+      --card: #1C1C1F;
+      --ink: #F4F4F5;
+      --muted: #A1A1A8;
+      --line: #2C2C31;
+      --widget: #1C1C1E;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121214; --card: #1C1C1F; --ink: #F4F4F5; --muted: #A1A1A8; --line: #2C2C31;
+    --widget: #1C1C1E; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 32px 16px 56px; }
+  a { color: inherit; }
+
+  header { display: grid; gap: 20px; margin-bottom: 28px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; }
+  .bolt {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--accent);
+    display: grid; place-items: center; flex: none;
+  }
+  h1 { font-size: clamp(28px, 7vw, 40px); line-height: 1.08; letter-spacing: -.025em; margin: 0; }
+  .lead { color: var(--muted); font-size: 17px; margin: 0; max-width: 34em; }
+
+  /* макет віджета */
+  .widget {
+    background: var(--widget); border-radius: 22px; padding: 14px 16px 12px;
+    box-shadow: var(--shadow); max-width: 360px; border: 1px solid var(--line);
+  }
+  .w-top { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .w-top span:last-child { font-weight: 400; }
+  .w-status { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 21px; font-weight: 700; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--on); }
+  .w-sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .bar { position: relative; display: flex; height: 18px; border-radius: 5px; overflow: hidden; margin-top: 10px; }
+  .bar i { display: block; height: 100%; }
+  .now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(28,28,30,.9); }
+  .ticks { display: flex; justify-content: space-between; font-size: 9px; color: #8E8E93; margin-top: 5px; }
+  .w-bottom { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 6px; }
+
+  .notice {
+    background: var(--card); border: 1px dashed var(--line); border-radius: 14px;
+    padding: 12px 14px; font-size: 15px; color: var(--muted); margin-bottom: 20px;
+  }
+  .notice[hidden] { display: none; }
+  .notice b { color: var(--ink); }
+
+  ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; counter-reset: s; }
+  .step {
+    background: var(--card); border-radius: 18px; padding: 18px 18px 18px 64px;
+    position: relative; box-shadow: var(--shadow); counter-increment: s;
+  }
+  .step::before {
+    content: counter(s); position: absolute; left: 18px; top: 18px;
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--ink); color: var(--bg);
+    display: grid; place-items: center; font-weight: 700; font-size: 15px;
+  }
+  .step h2 { font-size: 18px; margin: 4px 0 6px; letter-spacing: -.01em; }
+  .step p { margin: 0 0 10px; color: var(--muted); }
+  .step p:last-child { margin-bottom: 0; }
+  .step ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  .step li + li { margin-top: 4px; }
+  .step b, .step strong { color: var(--ink); font-weight: 600; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 48px; padding: 0 20px; border-radius: 14px; border: 0;
+    background: var(--accent); color: var(--accent-ink);
+    font: inherit; font-weight: 650; text-decoration: none; cursor: pointer;
+    margin: 4px 0 12px; width: 100%;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+  @media (min-width: 520px) { .btn { width: auto; } }
+
+  details { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; color: var(--ink); }
+  details p, details ol { color: var(--muted); font-size: 15px; }
+  details ol { padding-left: 20px; margin: 8px 0; }
+  .copied { font-size: 14px; color: var(--on); min-height: 1.4em; margin: 0; }
+  kbd {
+    font: 600 13px/1 -apple-system, sans-serif; padding: 2px 6px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+  }
+
+  .faq { margin-top: 36px; }
+  .faq h2 { font-size: 22px; letter-spacing: -.015em; margin: 0 0 8px; }
+  .faq details { padding: 12px 0; margin: 0; }
+  .faq details p { margin: 8px 0 0; }
+
+  footer { margin-top: 36px; font-size: 13px; color: var(--muted); }
+  footer p { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="bolt" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path d="M13.5 2 4 14h6.5L9 22l11-13h-7z" fill="#17171A"/></svg>
+      </span>
+      TOE Light
+    </div>
+    <h1>Графік відключень світла на головному екрані iPhone</h1>
+    <p class="lead">Віджет показує, чи є зараз світло за твоєю адресою, коли його вимкнуть або увімкнуть, і графік на сьогодні й завтра. Дані беруться з сайту Тернопільобленерго.</p>
+
+    <div class="widget" aria-label="Приклад віджета">
+      <div class="w-top"><span>вул. Прикладна, 1 · черга 1.1</span><span>графік від 18:52</span></div>
+      <div class="w-status"><span class="dot"></span>Світло є</div>
+      <div class="w-sub">вимкнуть об 11:00 (можливо з 10:30) · через 50 хв</div>
+      <div class="bar" aria-hidden="true">
+        <i style="width:43.75%;background:var(--on)"></i>
+        <i style="width:2.08%;background:var(--sw)"></i>
+        <i style="width:12.5%;background:var(--off)"></i>
+        <i style="width:2.08%;background:var(--sw)"></i>
+        <i style="width:39.59%;background:var(--on)"></i>
+        <span class="now" style="left:40.3%"></span>
+      </div>
+      <div class="ticks"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+      <div class="w-bottom"><span>Сьогодні: 11:00–14:00</span><span>Завтра: без відключень</span></div>
+    </div>
+  </header>
+
+  <p class="notice" id="desktop" hidden>
+    Віджет працює тільки на <b>iPhone або iPad</b>. Відкрий цю сторінку в Safari на телефоні:<br>
+    <b id="here"></b>
+  </p>
+
+  <ol class="steps">
+    <li class="step">
+      <h2>Встанови Scriptable</h2>
+      <p>Це безкоштовний застосунок, у якому працює віджет. Якщо він уже є, переходь до кроку 2.</p>
+      <a class="btn" href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank" rel="noopener">Відкрити Scriptable в App Store</a>
+      <p>Після встановлення відкрий Scriptable один раз, а потім повернись на цю сторінку.</p>
+    </li>
+
+    <li class="step">
+      <h2>Завантаж скрипт TOE Light</h2>
+      <a class="btn" href="toe-light.scriptable" download="TOE Light.scriptable">Завантажити TOE Light</a>
+      <ul>
+        <li>Safari спитає, чи завантажити файл. Натисни <b>Завантажити</b>.</li>
+        <li>Відкрий завантаження: іконка <kbd>⬇︎</kbd> або <kbd>ᴀA</kbd> в адресному рядку → <b>Завантаження</b>.</li>
+        <li>Натисни на файл <b>TOE Light.scriptable</b> і відкрий його в Scriptable. Скрипт зʼявиться у списку.</li>
+      </ul>
+      <details>
+        <summary>Файл не відкривається? Встав код вручну</summary>
+        <ol>
+          <li>Натисни кнопку нижче, і код скопіюється.</li>
+          <li>У Scriptable натисни <kbd>+</kbd> угорі праворуч і встав код.</li>
+          <li>Натисни на назву «Untitled Script» угорі й перейменуй на <b>TOE Light</b>, потім <b>Done</b>.</li>
+        </ol>
+        <button class="btn ghost" id="copy" type="button">Скопіювати код скрипта</button>
+        <p class="copied" id="copied" role="status"></p>
+      </details>
+    </li>
+
+    <li class="step">
+      <h2>Вибери свою адресу</h2>
+      <p>У Scriptable натисни на <b>TOE Light</b>. Скрипт запитає:</p>
+      <ul>
+        <li><b>населений пункт</b>: введи кілька літер і вибери зі списку;</li>
+        <li><b>вулицю</b>: введи частину назви або залиш поле порожнім, щоб побачити всі;</li>
+        <li><b>будинок</b>: черга визначиться автоматично.</li>
+      </ul>
+      <p>Там само можна вибрати тему (світла, темна чи як у системі), головний колір і за скільки хвилин нагадувати про відключення.</p>
+    </li>
+
+    <li class="step">
+      <h2>Додай віджет на головний екран</h2>
+      <ul>
+        <li>Утримуй палець на порожньому місці головного екрана.</li>
+        <li>Натисни <b>Редагувати</b> → <b>Додати віджет</b> (або <kbd>+</kbd> угорі).</li>
+        <li>Знайди <b>Scriptable</b>, вибери розмір (найкраще середній) і додай.</li>
+        <li>Натисни на доданий віджет ще раз і в полі <b>Script</b> вибери <b>TOE Light</b>.</li>
+      </ul>
+      <p>Так само віджет можна додати на екран блокування.</p>
+    </li>
+
+    <li class="step">
+      <h2>Дозволь сповіщення <span style="font-weight:400;color:var(--muted)">(за бажанням)</span></h2>
+      <p>Коли Scriptable попросить дозвіл на сповіщення, натисни <b>Дозволити</b>, і ти отримуватимеш нагадування перед кожним відключенням.</p>
+    </li>
+  </ol>
+
+  <section class="faq">
+    <h2>Питання</h2>
+    <details>
+      <summary>Як часто оновлюється віджет?</summary>
+      <p>Віджет просить оновлення кожні 15 хвилин, але коли саме його оновити, вирішує iOS. Зазвичай це раз на 15–30 хвилин. Якщо графік змінився, а віджет ще ні, відкрий Scriptable і запусти TOE Light.</p>
+    </details>
+    <details>
+      <summary>Як змінити адресу, тему чи колір?</summary>
+      <p>Відкрий Scriptable і натисни на TOE Light. Відкриється меню налаштувань.</p>
+    </details>
+    <details>
+      <summary>Що буде, коли вийде нова версія?</summary>
+      <p>Скрипт сам перевіряє оновлення кілька разів на добу і оновлюється без твоєї участі. Перевстановлювати нічого не треба.</p>
+    </details>
+    <details>
+      <summary>Можна поділитися адресою з сусідами?</summary>
+      <p>Так. У меню TOE Light вибери «Поділитися адресою» і надішли посилання. Хто вже встановив скрипт, відкриє посилання на iPhone, і адреса підставиться сама.</p>
+    </details>
+    <details>
+      <summary>Куди йде моя адреса?</summary>
+      <p>Адреса зберігається лише на твоєму телефоні. Скрипт надсилає її тільки на сервер Тернопільобленерго, щоб отримати графік, так само як це робить їхній сайт.</p>
+    </details>
+    <details>
+      <summary>Віджет показує «офлайн»</summary>
+      <p>Немає інтернету або сервер ТОЕ не відповідає. Тоді віджет показує останній отриманий графік і час, коли його було завантажено.</p>
+    </details>
+  </section>
+
+  <footer>
+    <p>Неофіційний проєкт, не повʼязаний з АТ «Тернопільобленерго». Офіційний графік: <a href="https://poweron.toe.com.ua/" target="_blank" rel="noopener">poweron.toe.com.ua</a>.</p>
+    <p>Вихідний код: <a href="https://github.com/kolaedr/toe-widget" target="_blank" rel="noopener">github.com/kolaedr/toe-widget</a></p>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var ua = navigator.userAgent;
+    var isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (!isIOS) {
+      document.getElementById("desktop").hidden = false;
+      document.getElementById("here").textContent = location.href.split("#")[0];
+    }
+
+    // код завантажуємо заздалегідь: iOS дозволяє копіювати лише одразу в обробнику натискання
+    var code = null;
+    fetch("toe-light.js", { cache: "no-cache" })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (t) { code = t; })
+      .catch(function () {});
+
+    var out = document.getElementById("copied");
+    document.getElementById("copy").addEventListener("click", function () {
+      if (!code) { out.style.color = "var(--off)"; out.textContent = "Код ще завантажується, спробуй за секунду."; return; }
+      var done = function () { out.style.color = ""; out.textContent = "Скопійовано. Тепер встав код у Scriptable."; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(done, fallback);
+      } else { fallback(); }
+      function fallback() {
+        var ta = document.createElement("textarea");
+        ta.value = code; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, code.length);
+        var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+        document.body.removeChild(ta);
+        if (ok) done(); else { out.style.color = "var(--off)"; out.textContent = "Не вдалося скопіювати. Відкрий toe-light.js і скопіюй вручну."; }
+      }
+    });
+  })();
+</script>
+</body>
+</html>
