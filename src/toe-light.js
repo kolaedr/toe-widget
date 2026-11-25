@@ -234,6 +234,8 @@ function outageBlocks(slots) {
 const rangeText = b => `${slotToTime(b.offStart)}–${slotToTime(b.offEnd)}`;
 
 // ---------- стан "зараз" ----------
+// lead — текст без зворотного відліку, target — момент, до якого рахуємо «через …»
+// (у віджеті відлік малює сама iOS і він іде без оновлення віджета)
 function computeStatus(today, tomorrow, now) {
   const slot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
   const t = today || new Array(48).fill("on");
@@ -241,6 +243,10 @@ function computeStatus(today, tomorrow, now) {
   const nowMs = now.getTime();
   const tomorrowDate = new Date(nowMs + 864e5);
   const minsTo = d => Math.max(0, Math.round((d - nowMs) / 60000));
+  const result = (title, lead, target, short) => ({
+    state, title, lead, target, short, slot,
+    sub: target ? `${lead} · через ${humanDur(minsTo(target))}` : lead,
+  });
 
   const todayBlocks = outageBlocks(today);
   const tomorrowBlocks = outageBlocks(tomorrow);
@@ -248,20 +254,15 @@ function computeStatus(today, tomorrow, now) {
   if (state === "on") {
     let b = todayBlocks.find(x => x.start > slot), base = now, dayWord = "";
     if (!b && tomorrow) { b = tomorrowBlocks[0]; base = tomorrowDate; dayWord = "завтра "; }
-    let sub, short;
     if (b) {
-      const start = slotDate(base, b.start);
       const warn = b.start < b.offStart ? ` (можливо з ${slotToTime(b.start)})` : "";
-      sub = `вимкнуть ${dayWord}${at(b.offStart)}${warn} · через ${humanDur(minsTo(start))}`;
-      short = `${dayWord ? "завтра " : ""}вимк. ${slotToTime(b.offStart)}`;
-    } else if (todayBlocks.length) {
-      sub = tomorrow ? "сьогодні й завтра відключень більше немає" : "сьогодні відключень більше немає";
-      short = "без відключень";
-    } else {
-      sub = tomorrow ? "сьогодні й завтра без відключень" : "на сьогодні відключень не заплановано";
-      short = "без відключень";
+      return result("Світло є", `вимкнуть ${dayWord}${at(b.offStart)}${warn}`, slotDate(base, b.start),
+        `${dayWord}вимк. ${slotToTime(b.offStart)}`);
     }
-    return { state, title: "Світло є", sub, short, slot };
+    if (todayBlocks.length) {
+      return result("Світло є", tomorrow ? "сьогодні й завтра відключень більше немає" : "сьогодні відключень більше немає", null, "без відключень");
+    }
+    return result("Світло є", tomorrow ? "сьогодні й завтра без відключень" : "на сьогодні відключень не заплановано", null, "без відключень");
   }
 
   // всередині блоку без світла; якщо він упирається в північ — продовження в завтрашньому графіку
@@ -282,19 +283,24 @@ function computeStatus(today, tomorrow, now) {
     const retTomorrow = retBase !== now;
     const sameAsEnd = retSlot === endSlot && retBase === endBase;
     const tail = sameAsEnd ? "" : ` (можливо до ${cont && !retTomorrow ? "завтра " : ""}${slotToTime(endSlot)})`;
-    const sub = `увімкнуть ${retTomorrow ? "завтра " : ""}${at(retSlot)}${tail} · через ${humanDur(minsTo(slotDate(retBase, retSlot)))}`;
-    return { state, title: "Світла немає", sub, short: `увімк. ${retTomorrow ? "завтра " : ""}${slotToTime(retSlot)}`, slot };
+    return result("Світла немає", `увімкнуть ${retTomorrow ? "завтра " : ""}${at(retSlot)}${tail}`, slotDate(retBase, retSlot),
+      `увімк. ${retTomorrow ? "завтра " : ""}${slotToTime(retSlot)}`);
   }
 
-  let sub, short;
   if (slot < b.offStart) {
-    sub = `вимкнення ${rangeText(b)} · через ${humanDur(minsTo(slotDate(now, b.offStart)))}`;
-    short = `вимк. ${slotToTime(b.offStart)}`;
-  } else {
-    sub = `увімкнуть до ${dayWord}${slotToTime(endSlot)} · через ${humanDur(minsTo(endDate))}`;
-    short = `до ${slotToTime(endSlot)}`;
+    return result("Перемикання", `вимкнення ${rangeText(b)}`, slotDate(now, b.offStart), `вимк. ${slotToTime(b.offStart)}`);
   }
-  return { state, title: "Перемикання", sub, short, slot };
+  return result("Перемикання", `увімкнуть до ${dayWord}${slotToTime(endSlot)}`, endDate, `до ${slotToTime(endSlot)}`);
+}
+
+// коли наступного разу зміниться стан (on/off/sw) — щоб попросити iOS оновити віджет саме тоді
+function nextChange(today, tomorrow, now) {
+  const slot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
+  const all = (today || new Array(48).fill("on")).concat(tomorrow || new Array(48).fill("on"));
+  for (let i = slot + 1; i < all.length; i++) {
+    if (all[i] !== all[slot]) return slotDate(i < 48 ? now : new Date(now.getTime() + 864e5), i % 48);
+  }
+  return null;
 }
 
 // ---------- сповіщення ----------
@@ -418,34 +424,115 @@ async function buildModel(p) {
   // немає ні звʼязку, ні кешу — не вдаємо, що світло є
   const unknown = data.offline && !data.fetchedAt;
   const st = unknown
-    ? { state: "unknown", title: "Немає даних", sub: "немає звʼязку з сервером TOE, спробую пізніше", short: "немає даних", slot: 0 }
+    ? { state: "unknown", title: "Немає даних", lead: "немає звʼязку з сервером TOE", target: null,
+        sub: "немає звʼязку з сервером TOE", short: "немає даних", slot: 0 }
     : computeStatus(todaySlots, tomorrowSlots, now);
   if (!data.offline) await scheduleNotifications(p, todaySlots, tomorrowSlots, now);
-  let updText;
-  if (data.offline) updText = data.fetchedAt ? `офлайн · ${hhmm(new Date(data.fetchedAt))}` : "немає звʼязку";
-  else if (todayM) updText = `графік від ${hhmm(new Date(todayM.dateCreate))}`;
-  else updText = `перевірено ${hhmm(now)}`;
-  const barSlots = unknown ? new Array(48).fill("unknown") : todaySlots;
-  return { now, data, todaySlots, tomorrowSlots, barSlots, unknown, st, updText };
-}
 
-function addStatusRow(w, P, st, titleSize) {
-  const row = w.addStack();
-  row.centerAlignContent();
-  const dot = row.addStack();
-  dot.size = new Size(12, 12);
-  dot.cornerRadius = 6;
-  dot.backgroundColor = P[st.state];
-  row.addSpacer(8);
-  const title = row.addText(st.title);
-  title.font = Font.boldSystemFont(titleSize);
-  title.textColor = P.text; title.lineLimit = 1; title.minimumScaleFactor = 0.7;
+  // показуємо час останньої синхронізації, а не час публікації графіка
+  const syncedAt = data.fetchedAt ? new Date(data.fetchedAt) : null;
+  const syncText = data.offline
+    ? (syncedAt ? `офлайн · ${hhmm(syncedAt)}` : "немає звʼязку")
+    : `оновлено ${hhmm(syncedAt)}`;
+
+  // просимо iOS оновити віджет через 15 хв або одразу після зміни стану, якщо вона раніше
+  const change = unknown ? null : nextChange(todaySlots, tomorrowSlots, now);
+  let refreshMs = now.getTime() + APP.refreshMinutes * 60000;
+  if (change) refreshMs = Math.min(refreshMs, change.getTime() + 30000);
+  const barSlots = unknown ? new Array(48).fill("unknown") : todaySlots;
+  return {
+    now, data, todaySlots, tomorrowSlots, barSlots, unknown, st, syncText,
+    graphAt: todayM ? new Date(todayM.dateCreate) : null,
+    refreshAt: new Date(refreshMs),
+  };
 }
 
 function addText(stack, text, font, color, lines) {
   const t = stack.addText(text);
   t.font = font; t.textColor = color; t.lineLimit = lines || 1; t.minimumScaleFactor = 0.75;
   return t;
+}
+
+const BULB = { on: "lightbulb.fill", off: "lightbulb.slash.fill", sw: "lightbulb.fill", unknown: "questionmark.circle.fill" };
+function addBulb(stack, P, state, size) {
+  const sym = SFSymbol.named(BULB[state] || "lightbulb.fill") || SFSymbol.named("lightbulb.fill");
+  const img = stack.addImage(sym.image);
+  img.imageSize = new Size(size, size);
+  img.tintColor = P[state] || P.on;
+  return img;
+}
+
+// рядок 1: лампочка + «Світло є» ліворуч; адреса й час синхронізації праворуч
+function addHeader(w, P, m, p, titleSize, opts) {
+  const o = opts || {};
+  const row = w.addStack();
+  row.centerAlignContent();
+  addBulb(row, P, m.st.state, titleSize);
+  row.addSpacer(6);
+  addText(row, m.st.title, Font.boldSystemFont(titleSize), P.text);
+  row.addSpacer(8);
+  row.addSpacer();
+  const right = row.addStack();
+  right.layoutVertically();
+  if (o.address) {
+    const line = right.addStack(); line.addSpacer();
+    addText(line, labelOf(p), Font.semiboldSystemFont(11), P.head);
+  }
+  const line2 = right.addStack(); line2.addSpacer();
+  addText(line2, o.address ? m.syncText : m.syncText.replace("оновлено ", ""), Font.systemFont(10), m.data.offline ? P.sw : P.sub);
+}
+
+// рядок 2: «вимкнуть о 19:30 · через 44 хв»; відлік малює iOS, він іде без оновлення віджета
+function addLead(w, P, st, size, lines) {
+  if (!st.target) { addText(w, st.lead, Font.systemFont(size), P.sub, lines || 1); return; }
+  const row = w.addStack();
+  addText(row, `${st.lead} · через `, Font.systemFont(size), P.sub);
+  const d = row.addDate(st.target);
+  d.applyRelativeStyle();
+  d.font = Font.systemFont(size); d.textColor = P.sub; d.lineLimit = 1; d.minimumScaleFactor = 0.75;
+}
+
+// графік дня -> відрізки [{st, from, to}] (слоти по 30 хв)
+function segments(slots) {
+  const arr = slots || new Array(48).fill("on");
+  const out = [];
+  let i = 0;
+  while (i < 48) {
+    const st = arr[i]; let j = i;
+    while (j < 48 && arr[j] === st) j++;
+    out.push({ st, from: i, to: j });
+    i = j;
+  }
+  return out;
+}
+const STATE_WORDS = { on: "світло є", off: "світла немає", sw: "перемикання", unknown: "невідомо" };
+
+// колонка «Сьогодні» / «Завтра» для великого віджета: графік словами
+function addDayColumn(parent, P, title, slots, nowSlot, maxRows, missingText) {
+  const col = parent.addStack();
+  col.layoutVertically();
+  addText(col, title, Font.semiboldSystemFont(13), P.text);
+  col.addSpacer(5);
+  // для сьогодні відсутній графік = без відключень; для завтра — графік ще не опублікували
+  if (!slots && missingText) { addText(col, missingText, Font.systemFont(12), P.sub); return; }
+  let segs = segments(slots);
+  // для сьогодні не показуємо те, що вже минуло
+  if (nowSlot != null) segs = segs.filter(s => s.to > nowSlot);
+  const shown = segs.slice(0, maxRows);
+  for (const s of shown) {
+    const current = nowSlot != null && s.from <= nowSlot && nowSlot < s.to;
+    const row = col.addStack();
+    row.centerAlignContent();
+    const dot = row.addStack();
+    dot.size = new Size(8, 8); dot.cornerRadius = 4; dot.backgroundColor = P[s.st];
+    row.addSpacer(6);
+    addText(row, `${slotToTime(s.from)}–${slotToTime(s.to)}`,
+      current ? Font.semiboldMonospacedSystemFont(12) : Font.regularMonospacedSystemFont(12), current ? P.text : P.sub);
+    row.addSpacer(6);
+    addText(row, STATE_WORDS[s.st], current ? Font.semiboldSystemFont(12) : Font.systemFont(12), current ? P.text : P.sub);
+    col.addSpacer(2);
+  }
+  if (segs.length > shown.length) addText(col, `і ще ${segs.length - shown.length}…`, Font.systemFont(11), P.sub);
 }
 
 async function renderWidget(p, family) {
@@ -455,7 +542,7 @@ async function renderWidget(p, family) {
   const { now, st } = m;
 
   const w = new ListWidget();
-  w.refreshAfterDate = new Date(now.getTime() + APP.refreshMinutes * 60000);
+  w.refreshAfterDate = m.refreshAt;
   w.url = `${APP.site}/`;
 
   // екран блокування
@@ -466,15 +553,20 @@ async function renderWidget(p, family) {
     } else if (fam === "accessoryCircular") {
       w.addAccessoryWidgetBackground = true;
       const s = w.addStack(); s.layoutVertically(); s.centerAlignContent();
-      const sym = SFSymbol.named({ on: "bolt.fill", off: "bolt.slash.fill", sw: "bolt.badge.clock", unknown: "questionmark" }[st.state]);
       const row1 = s.addStack(); row1.addSpacer();
-      const img = row1.addImage(sym.image); img.imageSize = new Size(16, 16); row1.addSpacer();
+      const img = row1.addImage(SFSymbol.named(BULB[st.state] || "lightbulb.fill").image);
+      img.imageSize = new Size(16, 16); row1.addSpacer();
       const row2 = s.addStack(); row2.addSpacer();
       const tm = st.short.match(/\d\d:\d\d/);
       const t = row2.addText(tm ? tm[0] : "—"); t.font = Font.semiboldSystemFont(11); t.minimumScaleFactor = 0.6; row2.addSpacer();
     } else {
       const t1 = w.addText(`${icon} ${st.title}`); t1.font = Font.boldSystemFont(14); t1.lineLimit = 1;
-      const t2 = w.addText(st.sub); t2.font = Font.systemFont(12); t2.lineLimit = 2; t2.minimumScaleFactor = 0.8;
+      const t2 = w.addText(st.lead); t2.font = Font.systemFont(12); t2.lineLimit = 1; t2.minimumScaleFactor = 0.8;
+      if (st.target) {
+        const r = w.addStack();
+        const t3 = r.addText("через "); t3.font = Font.systemFont(12);
+        const d = r.addDate(st.target); d.applyRelativeStyle(); d.font = Font.systemFont(12); d.lineLimit = 1;
+      }
     }
     return w;
   }
@@ -483,33 +575,29 @@ async function renderWidget(p, family) {
 
   if (fam === "small") {
     w.setPadding(12, 12, 10, 12);
-    addText(w, `черга ${p.group}`, Font.semiboldSystemFont(11), m.data.offline ? P.sw : P.head);
+    addHeader(w, P, m, p, 16, { address: false });
     w.addSpacer(4);
-    addStatusRow(w, P, st, 18);
-    w.addSpacer(3);
-    addText(w, st.sub, Font.systemFont(11), P.sub, 3);
+    addText(w, st.lead, Font.systemFont(12), P.sub, 2);
+    if (st.target) {
+      const r = w.addStack();
+      addText(r, "через ", Font.systemFont(12), P.sub);
+      const d = r.addDate(st.target); d.applyRelativeStyle();
+      d.font = Font.systemFont(12); d.textColor = P.sub; d.lineLimit = 1; d.minimumScaleFactor = 0.75;
+    }
     w.addSpacer();
     addTimeline(w, m.barSlots, now, 130);
     return w;
   }
 
-  // середній і великий
-  w.setPadding(13, 14, 11, 14);
-  const top = w.addStack();
-  top.centerAlignContent();
-  addText(top, `${labelOf(p)}  ·  черга ${p.group}`, Font.semiboldSystemFont(11), P.head);
-  top.addSpacer();
-  addText(top, m.updText, Font.systemFont(10), m.data.offline ? P.sw : P.sub);
-
-  w.addSpacer(6);
-  addStatusRow(w, P, st, 21);
-  w.addSpacer(2);
-  addText(w, st.sub, Font.systemFont(12), P.sub, fam === "medium" ? 1 : 2);
-  w.addSpacer(7);
-  addTimeline(w, m.barSlots, now, 300);
-  w.addSpacer(4);
-
+  // середній
   if (fam === "medium") {
+    w.setPadding(12, 14, 11, 14);
+    addHeader(w, P, m, p, 20, { address: true });
+    w.addSpacer(4);
+    addLead(w, P, st, 12);
+    w.addSpacer(7);
+    addTimeline(w, m.barSlots, now, 300);
+    w.addSpacer(4);
     const bottom = w.addStack();
     bottom.centerAlignContent();
     addText(bottom, dayText("Сьогодні", m.todaySlots), Font.mediumSystemFont(11), P.sub);
@@ -518,16 +606,26 @@ async function renderWidget(p, family) {
     return w;
   }
 
-  addText(w, dayText("Сьогодні", m.todaySlots), Font.mediumSystemFont(12), P.sub, 2);
-  w.addSpacer(14);
-  addText(w, "Завтра", Font.semiboldSystemFont(14), P.text);
-  w.addSpacer(6);
-  if (m.tomorrowSlots) {
-    addTimeline(w, m.tomorrowSlots, now, 300, { showNow: false });
-    w.addSpacer(4);
-  }
-  addText(w, dayText("Завтра", m.tomorrowSlots), Font.mediumSystemFont(12), P.sub, 2);
+  // великий (і extraLarge на iPad): графік на сьогодні й завтра словами
+  w.setPadding(14, 16, 12, 16);
+  addHeader(w, P, m, p, 22, { address: true });
+  w.addSpacer(4);
+  addLead(w, P, st, 13, 2);
+  w.addSpacer(8);
+  addTimeline(w, m.barSlots, now, 300);
+  w.addSpacer(10);
+  const cols = w.addStack();
+  cols.layoutHorizontally();
+  cols.topAlignContent();
+  addDayColumn(cols, P, "Сьогодні", m.todaySlots, st.slot, 8, m.unknown ? "немає даних" : null);
+  cols.addSpacer();
+  addDayColumn(cols, P, "Завтра", m.tomorrowSlots, null, 8, m.unknown ? "немає даних" : "графіка ще немає");
+  cols.addSpacer();
   w.addSpacer();
+  const foot = w.addStack();
+  addText(foot, `черга ${p.group}`, Font.systemFont(10), P.sub);
+  foot.addSpacer();
+  if (m.graphAt) addText(foot, `графік TOE від ${hhmm(m.graphAt)}`, Font.systemFont(10), P.sub);
   return w;
 }
 
